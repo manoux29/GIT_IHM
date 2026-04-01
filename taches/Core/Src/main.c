@@ -76,6 +76,15 @@ volatile uint8_t sens = 0;
 #define RESOLUTION_ENCODEUR  500
 #define RAPPORT_REDUCTION    218
 
+// Variables UART
+uint8_t rx_byte;
+uint8_t rx_buffer[50];
+uint8_t rx_index = 0;
+
+// Variables pour le controle du moteur depuis le PC
+volatile uint8_t motor_running = 0;
+volatile int32_t consigne_vitesse_rpm = 150;
+volatile uint32_t current_pwm = 0;
 
 /* USER CODE END 0 */
 
@@ -134,6 +143,9 @@ int main(void)
   // Duty cycle initial à 50%
   __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 500);
 
+  // Demarrer reception UART avec interruption
+  HAL_UART_Receive_IT(&huart2, &rx_byte, 1);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -157,7 +169,8 @@ int main(void)
 	             valeur_brute = HAL_ADC_GetValue(&hadc1);
 	             tension_volts = valeur_brute * 3.3f / 4095.0f;
 
-	             uint32_t duty = (valeur_brute * PWM_MAX) / 4095.0f;
+	             // Mise a jour du PWM basee sur la consigne UART, et non plus sur l'ADC
+	             uint32_t duty = current_pwm;
 	             __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, duty);
 
 
@@ -586,7 +599,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
         if(counter >= 1000) // toutes les secondes
         {
-        	flag_1s=1;
+		flag_1s=1;
             counter = 0;
 
 
@@ -596,11 +609,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     }
     else if(htim->Instance == TIM2)
       {
-    	comp++;
-    	  if(comp >= 100) // toutes les 100 millisecondes
-    	        {
-    	        	flag_100ms=1;
-    	            comp = 0;
+	comp++;
+	  if(comp >= 100) // toutes les 100 millisecondes
+	        {
+			flag_100ms=1;
+	            comp = 0;
 
 
       }
@@ -628,6 +641,66 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     }
 }
 
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART2)
+    {
+        if (rx_byte == '\n' || rx_byte == '\r')
+        {
+            rx_buffer[rx_index] = '\0'; // Fin de chaine
+
+            // Traitement de la commande si non vide
+            if (rx_index > 0)
+            {
+                if (strncmp((char*)rx_buffer, "START", 5) == 0)
+                {
+                    motor_running = 1;
+                    // Mettre une petite rotation (consigne actuelle)
+                    current_pwm = (consigne_vitesse_rpm * PWM_MAX) / 3000;
+                    if(current_pwm == 0) current_pwm = 200; // petite rotation si 0
+                }
+                else if (strncmp((char*)rx_buffer, "STOP", 4) == 0)
+                {
+                    motor_running = 0;
+                    current_pwm = 0; // stop met pwm a 0
+                }
+                else if (strncmp((char*)rx_buffer, "DIR:GAUCHE", 10) == 0)
+                {
+                    sens = 1;
+                    moteur_sens(sens);
+                }
+                else if (strncmp((char*)rx_buffer, "DIR:DROITE", 10) == 0)
+                {
+                    sens = 0;
+                    moteur_sens(sens);
+                }
+                else if (strncmp((char*)rx_buffer, "SPEED:", 6) == 0)
+                {
+                    int vitesse;
+                    if (sscanf((char*)rx_buffer + 6, "%d", &vitesse) == 1)
+                    {
+                        consigne_vitesse_rpm = vitesse;
+                        if (motor_running)
+                        {
+                            current_pwm = (consigne_vitesse_rpm * PWM_MAX) / 3000;
+                        }
+                    }
+                }
+            }
+            rx_index = 0;
+        }
+        else
+        {
+            if (rx_index < sizeof(rx_buffer) - 1)
+            {
+                rx_buffer[rx_index++] = rx_byte;
+            }
+        }
+
+        // Relancer l'interruption
+        HAL_UART_Receive_IT(&huart2, &rx_byte, 1);
+    }
+}
 
 /* USER CODE END 4 */
 
