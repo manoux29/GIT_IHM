@@ -1,19 +1,20 @@
 import sys
+import collections
 import serial
+import serial.tools.list_ports
+import pyqtgraph as pg
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QGridLayout, QLabel, QPushButton,
-                             QProgressBar, QDoubleSpinBox, QSlider, QFrame)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QPixmap
-import pyqtgraph as pg
-import collections
+                             QDoubleSpinBox, QSlider, QFrame, QComboBox, QMessageBox)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtGui import QFont, QIcon
 
 # --- THREAD DE COMMUNICATION SÉRIE ---
-# (Identique à ton code d'origine)
 class MotorWorkerThread(QThread):
     data_updated = pyqtSignal(dict)
+    connection_error = pyqtSignal(str)
 
-    def __init__(self, port="COM7", baudrate=115200):
+    def __init__(self, port, baudrate=115200):
         super().__init__()
         self.port = port
         self.baudrate = baudrate
@@ -32,6 +33,7 @@ class MotorWorkerThread(QThread):
 
                     if ligne and ligne.startswith("ADC:"):
                         try:
+                            # Exemple reçu : ADC:1023  Tension:0.82V  PWM:524  Vitesse:450 RPM
                             part_adc = ligne.split("ADC:")[1].split()[0]
                             part_tension = ligne.split("Tension:")[1].split("V")[0]
                             part_pwm = ligne.split("PWM:")[1].split()[0]
@@ -46,10 +48,10 @@ class MotorWorkerThread(QThread):
                             self.data_updated.emit(donnees)
 
                         except Exception as e:
-                            print(f"Erreur d'analyse : '{ligne}' -> {e}")
+                            pass # Ignorer les erreurs d'analyse silencieusement
 
         except serial.SerialException as e:
-            print(f"Erreur d'ouverture du port {self.port}: {e}")
+            self.connection_error.emit(f"Erreur d'ouverture du port {self.port}: {e}")
 
         finally:
              if self.serial_conn and self.serial_conn.is_open:
@@ -63,7 +65,6 @@ class MotorWorkerThread(QThread):
         if self.serial_conn and self.serial_conn.is_open:
             try:
                 self.serial_conn.write((cmd_str + '\n').encode('utf-8'))
-                print(f"PC -> STM32 : {cmd_str}")
             except Exception as e:
                 print(f"Erreur d'envoi : {e}")
 
@@ -80,317 +81,388 @@ class MotorWorkerThread(QThread):
 
 # --- STYLESHEET GLOBAL ---
 QSS_STYLESHEET = """
-QMainWindow { background-color: #1e2430; color: #f0f0f0; font-family: 'Segoe UI', Arial, sans-serif; }
-#main_title { color: #f0f0f0; font-size: 22px; font-weight: bold; padding: 10px; }
-.MeasurePanel { background-color: #2b3245; border: 1px solid #3d4661; border-radius: 10px; padding: 15px; margin: 5px; }
-.MeasureLabel { color: #8c98ac; font-size: 11px; font-weight: bold; text-transform: uppercase; }
-.MeasureValue { color: #4cdfff; font-size: 28px; font-weight: bold; padding-top: 5px; }
-QProgressBar { background-color: #1e2430; border: none; border-radius: 5px; text-align: center; height: 10px; }
-QProgressBar::chunk { background-color: #4cdfff; border-radius: 5px; }
-.CentralPanel { background-color: #2b3245; border: 1px solid #3d4661; border-radius: 10px; padding: 15px; margin: 5px; }
+QMainWindow { background-color: #12151C; color: #E0E6ED; font-family: 'Segoe UI', Arial, sans-serif; }
+#main_title { color: #FFFFFF; font-size: 24px; font-weight: bold; letter-spacing: 2px; }
+
+/* Cartes de valeurs (Cards) */
+.ValueCard { background-color: #1A1F29; border-radius: 12px; border: 1px solid #2A3142; }
+.CardTitle { color: #8A9BB3; font-size: 13px; font-weight: bold; text-transform: uppercase; }
+.CardValue { color: #00D2FF; font-size: 32px; font-weight: bold; }
+.CardUnit { color: #8A9BB3; font-size: 14px; font-weight: bold; margin-bottom: 5px;}
+
+/* Panneaux de contrôle */
+.ControlPanel { background-color: #1A1F29; border-radius: 12px; border: 1px solid #2A3142; padding: 15px; }
 
 /* Boutons classiques */
-QPushButton { background-color: #3d4661; color: white; border: none; border-radius: 5px; padding: 10px 15px; font-weight: bold; font-size: 14px;}
-QPushButton:hover { background-color: #4d597c; }
+QPushButton { background-color: #2A3142; color: white; border: none; border-radius: 6px; padding: 10px 15px; font-weight: bold; font-size: 13px;}
+QPushButton:hover { background-color: #374158; }
+QPushButton:disabled { background-color: #161A22; color: #4B5563; }
+
+/* Bouton Connecter */
+#connect_btn { background-color: #00D2FF; color: #12151C; }
+#connect_btn:hover { background-color: #33DBFF; }
+#connect_btn:checked { background-color: #FF3B30; color: white; }
+#connect_btn:checked:hover { background-color: #FF5A52; }
 
 /* Bouton Démarrer */
-#demarrer_btn { background-color: #1ccdfc; color: #1e2430; font-size: 16px; padding: 15px;}
-#demarrer_btn:hover { background-color: #66e7ff; }
+#start_btn { background-color: #10B981; color: white; font-size: 16px; padding: 15px; }
+#start_btn:hover { background-color: #34D399; }
+#start_btn:checked { background-color: #EF4444; }
+#start_btn:checked:hover { background-color: #F87171; }
 
 /* Boutons de Direction (Toggle) */
-#dir_btn { background-color: #1e2430; color: #8c98ac; border: 2px solid #3d4661; }
-#dir_btn:hover { background-color: #2b3245; }
-#dir_btn:checked { background-color: #2b3245; color: #4cdfff; border: 2px solid #4cdfff; }
+#dir_btn { background-color: #1A1F29; color: #8A9BB3; border: 2px solid #2A3142; }
+#dir_btn:hover { background-color: #242B38; }
+#dir_btn:checked { background-color: #242B38; color: #00D2FF; border: 2px solid #00D2FF; }
 
-QDoubleSpinBox { background-color: #1e2430; color: #f0f0f0; border: 1px solid #3d4661; border-radius: 5px; padding: 10px; font-size: 18px; font-weight: bold; }
-QSlider::groove:horizontal { border: none; height: 8px; background: #1e2430; border-radius: 4px; }
-QSlider::handle:horizontal { background: #4cdfff; border: none; width: 20px; height: 20px; margin: -6px 0; border-radius: 10px; }
+/* ComboBox et Inputs */
+QComboBox { background-color: #2A3142; color: white; border: 1px solid #374158; border-radius: 6px; padding: 8px; font-size: 14px; }
+QComboBox::drop-down { border: none; }
+QComboBox QAbstractItemView { background-color: #1A1F29; color: white; selection-background-color: #2A3142; }
+
+QDoubleSpinBox { background-color: #1A1F29; color: #00D2FF; border: 2px solid #2A3142; border-radius: 6px; padding: 10px; font-size: 20px; font-weight: bold; }
+QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 0px; } /* Hide arrows */
+
+QSlider::groove:horizontal { border: none; height: 8px; background: #2A3142; border-radius: 4px; }
+QSlider::sub-page:horizontal { background: #00D2FF; border-radius: 4px; }
+QSlider::handle:horizontal { background: #FFFFFF; border: 2px solid #00D2FF; width: 20px; height: 20px; margin: -6px 0; border-radius: 10px; }
 """
 
-# --- WIDGET DE MESURE ---
-class MeasurementPanel(QFrame):
-    def __init__(self, title, unit, is_large=False):
+# --- WIDGET CARTE DE VALEUR (CARD) ---
+class ValueCard(QFrame):
+    def __init__(self, title, unit, color="#00D2FF"):
         super().__init__()
-        self.setProperty("class", "MeasurePanel")
+        self.setProperty("class", "ValueCard")
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 15, 20, 15)
+
         self.title_label = QLabel(title)
-        self.title_label.setProperty("class", "MeasureLabel")
+        self.title_label.setProperty("class", "CardTitle")
         layout.addWidget(self.title_label)
 
         value_layout = QHBoxLayout()
         self.value_label = QLabel("0")
-        self.value_label.setProperty("class", "MeasureValue")
-        if is_large: self.value_label.setStyleSheet("font-size: 36px;")
+        self.value_label.setProperty("class", "CardValue")
+        self.value_label.setStyleSheet(f"color: {color};")
 
         self.unit_label = QLabel(unit)
-        self.unit_label.setStyleSheet("color: #8c98ac; font-size: 14px; font-weight: bold; padding-bottom: 5px;")
+        self.unit_label.setProperty("class", "CardUnit")
 
         value_layout.addWidget(self.value_label, alignment=Qt.AlignmentFlag.AlignBottom)
         value_layout.addWidget(self.unit_label, alignment=Qt.AlignmentFlag.AlignBottom)
         value_layout.addStretch()
         layout.addLayout(value_layout)
 
-        self.progress_bar = QProgressBar(self)
-        layout.addWidget(self.progress_bar)
-
-    def set_value(self, value_str, progress_perc):
+    def set_value(self, value_str):
         self.value_label.setText(value_str)
-        self.progress_bar.setValue(int(progress_perc))
 
 
-# --- FENÊTRE PRINCIPALE ---
+# --- FENÊTRE PRINCIPALE (DASHBOARD) ---
 class ModernMotorHMI(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("IHM Moteur Complète")
-        self.resize(1100, 650)
+        self.setWindowTitle("STM32 Motor Dashboard PRO")
+        self.resize(1200, 800)
         self.setStyleSheet(QSS_STYLESHEET)
+
+        self.worker = None
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
+        main_layout.setSpacing(20)
+        main_layout.setContentsMargins(25, 25, 25, 25)
 
-        title_label = QLabel("CONTRÔLE ET DIAGNOSTIC MOTEUR")
+        # ================= HEADER =================
+        header_layout = QHBoxLayout()
+
+        title_label = QLabel("STM32 MOTOR DASHBOARD")
         title_label.setObjectName("main_title")
-        main_layout.addWidget(title_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        header_layout.addWidget(title_label)
+        header_layout.addStretch()
 
-        content_layout = QHBoxLayout()
-        main_layout.addLayout(content_layout)
+        # Selection du port COM
+        self.port_combo = QComboBox()
+        self.port_combo.setFixedWidth(150)
+        self.refresh_ports()
+        header_layout.addWidget(self.port_combo)
 
-        # --- COLONNE 1 : LECTURE DES DONNÉES ---
-        col1_layout = QVBoxLayout()
-        self.panel_adc = MeasurementPanel("Valeur ADC Lues", " / 4095")
-        self.panel_adc.progress_bar.setStyleSheet("QProgressBar::chunk { background-color: #f5a623; }")
-        col1_layout.addWidget(self.panel_adc)
+        self.refresh_btn = QPushButton("↻")
+        self.refresh_btn.setFixedWidth(40)
+        self.refresh_btn.clicked.connect(self.refresh_ports)
+        header_layout.addWidget(self.refresh_btn)
 
-        self.panel_tension = MeasurementPanel("Tension", "V")
-        col1_layout.addWidget(self.panel_tension)
+        self.connect_btn = QPushButton("CONNECTER")
+        self.connect_btn.setObjectName("connect_btn")
+        self.connect_btn.setCheckable(True)
+        self.connect_btn.setFixedWidth(120)
+        self.connect_btn.clicked.connect(self.toggle_connection)
+        header_layout.addWidget(self.connect_btn)
 
-        self.panel_pwm = MeasurementPanel("PWM STM32", " / 2099")
-        self.panel_pwm.progress_bar.setStyleSheet("QProgressBar::chunk { background-color: #7ed321; }")
-        col1_layout.addWidget(self.panel_pwm)
+        main_layout.addLayout(header_layout)
 
-        self.panel_vitesse = MeasurementPanel("Vitesse Réelle", "RPM", is_large=True)
-        col1_layout.addWidget(self.panel_vitesse)
+        # ================= TOP SECTION (CARDS & CONTROLS) =================
+        top_section = QHBoxLayout()
 
-        content_layout.addLayout(col1_layout, 1)
+        # --- CARDS (Left) ---
+        cards_layout = QVBoxLayout()
+        cards_layout.setSpacing(15)
 
-        # --- COLONNE 2 : VISUALISATION (IMAGE) ---
-        motor_panel = QFrame()
-        motor_panel.setProperty("class", "CentralPanel")
-        motor_layout = QVBoxLayout(motor_panel)
-        motor_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.card_vitesse = ValueCard("VITESSE RÉELLE MOTEUR", "RPM", color="#00D2FF")
+        self.card_pwm = ValueCard("DUTY CYCLE (PWM)", "/ 2099", color="#10B981")
+        self.card_tension = ValueCard("TENSION LUE (ADC)", "V", color="#F5A623")
 
-        # Intégration de l'image
-        self.motor_image = QLabel()
-        # Assure-toi que "motor_icon.png" existe dans le même dossier
-        pixmap = QPixmap("motor_icon.png")
-        if not pixmap.isNull():
-            # Redimensionne l'image pour qu'elle s'intègre bien sans être déformée
-            self.motor_image.setPixmap(pixmap.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-        else:
-            self.motor_image.setText("[ Image motor_icon.png introuvable ]")
-            self.motor_image.setStyleSheet("color: #8c98ac; font-size: 14px; font-style: italic;")
+        cards_layout.addWidget(self.card_vitesse)
+        cards_layout.addWidget(self.card_pwm)
+        cards_layout.addWidget(self.card_tension)
 
-        self.motor_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        motor_layout.addWidget(self.motor_image)
+        top_section.addLayout(cards_layout, 1)
 
-        # Indicateurs de flèches (feedback réel du moteur)
-        dir_layout = QHBoxLayout()
-        self.dir_left_indic = QLabel("←")
-        self.dir_right_indic = QLabel("→")
-        self.dir_left_indic.setStyleSheet("color: #3d4661; font-size: 60px; font-weight: bold;")
-        self.dir_right_indic.setStyleSheet("color: #3d4661; font-size: 60px; font-weight: bold;")
-        dir_layout.addStretch()
-        dir_layout.addWidget(self.dir_left_indic)
-        dir_layout.addSpacing(40)
-        dir_layout.addWidget(self.dir_right_indic)
-        dir_layout.addStretch()
-        motor_layout.addLayout(dir_layout)
-
-        content_layout.addWidget(motor_panel, 1)
-
-        # --- COLONNE 3 : CONTRÔLE ---
+        # --- CONTROL PANEL (Right) ---
         control_panel = QFrame()
-        control_panel.setProperty("class", "CentralPanel")
+        control_panel.setProperty("class", "ControlPanel")
         control_layout = QVBoxLayout(control_panel)
-        control_layout.setSpacing(20) # Aère les éléments
+        control_layout.setSpacing(20)
 
-        # 1. Sélection de la direction
-        dir_label = QLabel("SENS DE ROTATION SOUHAITÉ")
-        dir_label.setStyleSheet("color: #8c98ac; font-size: 12px; font-weight: bold;")
+        # Sens de rotation
+        dir_label = QLabel("DIRECTION DU MOTEUR")
+        dir_label.setProperty("class", "CardTitle")
         control_layout.addWidget(dir_label)
 
         btn_dir_layout = QHBoxLayout()
-        self.gauche_btn = QPushButton("← GAUCHE")
+        self.gauche_btn = QPushButton("← ROTATION GAUCHE")
         self.gauche_btn.setObjectName("dir_btn")
-        self.gauche_btn.setCheckable(True) # Rend le bouton "activable"
+        self.gauche_btn.setCheckable(True)
+        self.gauche_btn.setFixedHeight(50)
 
-        self.droite_btn = QPushButton("DROITE →")
+        self.droite_btn = QPushButton("ROTATION DROITE →")
         self.droite_btn.setObjectName("dir_btn")
         self.droite_btn.setCheckable(True)
-        self.droite_btn.setChecked(True) # Par défaut, on tourne à droite
+        self.droite_btn.setChecked(True)
+        self.droite_btn.setFixedHeight(50)
 
         btn_dir_layout.addWidget(self.gauche_btn)
         btn_dir_layout.addWidget(self.droite_btn)
         control_layout.addLayout(btn_dir_layout)
 
-        # 2. Consigne de vitesse
         control_layout.addSpacing(10)
-        speed_label = QLabel("CONSIGNE VITESSE (PC)")
-        speed_label.setStyleSheet("color: #8c98ac; font-size: 12px; font-weight: bold;")
+
+        # Consigne de vitesse
+        speed_label = QLabel("CONSIGNE DE VITESSE")
+        speed_label.setProperty("class", "CardTitle")
         control_layout.addWidget(speed_label)
 
         self.speed_spinbox = QDoubleSpinBox()
         self.speed_spinbox.setRange(0, 4000)
         self.speed_spinbox.setValue(150)
+        self.speed_spinbox.setDecimals(0)
         self.speed_spinbox.setSuffix(" RPM")
         self.speed_spinbox.setAlignment(Qt.AlignmentFlag.AlignCenter)
         control_layout.addWidget(self.speed_spinbox)
 
-        # Slider avec boutons +/-
+        # Slider
         slider_layout = QHBoxLayout()
         self.vitesse_moins_btn = QPushButton("-")
-        self.vitesse_moins_btn.setFixedWidth(40)
+        self.vitesse_moins_btn.setFixedSize(40, 40)
 
         self.vitesse_slider = QSlider(Qt.Orientation.Horizontal)
         self.vitesse_slider.setRange(0, 4000)
         self.vitesse_slider.setValue(150)
 
         self.vitesse_plus_btn = QPushButton("+")
-        self.vitesse_plus_btn.setFixedWidth(40)
+        self.vitesse_plus_btn.setFixedSize(40, 40)
 
         slider_layout.addWidget(self.vitesse_moins_btn)
         slider_layout.addWidget(self.vitesse_slider)
         slider_layout.addWidget(self.vitesse_plus_btn)
         control_layout.addLayout(slider_layout)
 
-        control_layout.addStretch() # Pousse le bouton démarrer vers le bas
+        control_layout.addStretch()
 
-        # 3. Bouton Démarrer/Arrêter
-        self.demarrer_btn = QPushButton("DÉMARRER LE MOTEUR")
-        self.demarrer_btn.setObjectName("demarrer_btn")
-        control_layout.addWidget(self.demarrer_btn)
+        # Bouton Start/Stop
+        self.start_btn = QPushButton("DÉMARRER LE MOTEUR")
+        self.start_btn.setObjectName("start_btn")
+        self.start_btn.setCheckable(True)
+        control_layout.addWidget(self.start_btn)
 
-        content_layout.addWidget(control_panel, 1)
+        top_section.addWidget(control_panel, 2)
+        main_layout.addLayout(top_section, 1)
 
-        # --- LIGNE DU BAS : GRAPHIQUE TEMPS RÉEL ---
-        self.plot_panel = QFrame()
-        self.plot_panel.setProperty("class", "CentralPanel")
-        plot_layout = QVBoxLayout(self.plot_panel)
+        # ================= BOTTOM SECTION (GRAPHS) =================
+        graph_panel = QFrame()
+        graph_panel.setProperty("class", "ControlPanel")
+        graph_layout = QVBoxLayout(graph_panel)
+        graph_layout.setContentsMargins(5, 5, 5, 5)
 
-        self.graph_widget = pg.PlotWidget(title="Suivi de la Vitesse en Temps Réel")
-        self.graph_widget.setBackground('#1e2430')
+        pg.setConfigOptions(antialias=True) # Lissage des courbes
+
+        self.graph_widget = pg.PlotWidget(title="Performance en Temps Réel")
+        self.graph_widget.setBackground('#1A1F29')
         self.graph_widget.setLabel('left', 'Vitesse', units='RPM')
-        self.graph_widget.setLabel('bottom', 'Temps')
-        self.graph_widget.showGrid(x=True, y=True, alpha=0.3)
-        self.graph_widget.setYRange(-4500, 4500) # Range to cover -4000 to 4000 plus some margin
+        self.graph_widget.setLabel('bottom', 'Échantillons')
+        self.graph_widget.showGrid(x=True, y=True, alpha=0.15)
+        self.graph_widget.setYRange(-4500, 4500)
 
-        plot_layout.addWidget(self.graph_widget)
-        main_layout.addWidget(self.plot_panel)
+        # Legend
+        self.graph_widget.addLegend(offset=(20, 20), pen='#2A3142', brush='#1A1F29')
+
+        graph_layout.addWidget(self.graph_widget)
+        main_layout.addWidget(graph_panel, 2)
 
         # Données du graphe
-        self.plot_data_time = collections.deque(maxlen=100)
-        self.plot_data_vitesse = collections.deque(maxlen=100)
-        self.plot_data_consigne = collections.deque(maxlen=100)
+        self.history_size = 200
+        self.plot_data_time = collections.deque(maxlen=self.history_size)
+        self.plot_data_vitesse = collections.deque(maxlen=self.history_size)
+        self.plot_data_consigne = collections.deque(maxlen=self.history_size)
         self.time_counter = 0
 
-        pen_vitesse = pg.mkPen(color='#4cdfff', width=2)
-        pen_consigne = pg.mkPen(color='#f5a623', width=2, style=Qt.PenStyle.DashLine)
+        # Styles des courbes
+        pen_vitesse = pg.mkPen(color='#00D2FF', width=3)
+        pen_consigne = pg.mkPen(color='#F5A623', width=2, style=Qt.PenStyle.DashLine)
 
         self.curve_vitesse = self.graph_widget.plot(pen=pen_vitesse, name="Vitesse Réelle")
         self.curve_consigne = self.graph_widget.plot(pen=pen_consigne, name="Consigne")
 
-        # --- INITIALISATION ET CONNEXIONS ---
-        self.worker = MotorWorkerThread(port="COM7")
-        self.worker.data_updated.connect(self.update_ui)
-        self.worker.start()
+        # Remplissage sous la courbe (Fill)
+        brush_vitesse = pg.mkBrush(color=(0, 210, 255, 40)) # Bleu semi-transparent
+        self.curve_vitesse.setFillLevel(0)
+        self.curve_vitesse.setBrush(brush_vitesse)
 
-        self.demarrer_btn.clicked.connect(self.toggle_motor)
-
-        # Logique des boutons de direction
+        # --- CONNEXIONS ---
+        self.start_btn.clicked.connect(self.toggle_motor)
         self.gauche_btn.clicked.connect(self.select_direction_gauche)
         self.droite_btn.clicked.connect(self.select_direction_droite)
-
-        # Synchronisation slider/spinbox
         self.speed_spinbox.valueChanged.connect(self.update_slider)
         self.vitesse_slider.valueChanged.connect(self.update_spinbox)
         self.vitesse_plus_btn.clicked.connect(lambda: self.speed_spinbox.setValue(self.speed_spinbox.value() + 50))
         self.vitesse_moins_btn.clicked.connect(lambda: self.speed_spinbox.setValue(max(0, self.speed_spinbox.value() - 50)))
 
+        self.set_controls_enabled(False) # Désactivé par défaut (non connecté)
+
+
+    def refresh_ports(self):
+        self.port_combo.clear()
+        ports = serial.tools.list_ports.comports()
+        for p in ports:
+            self.port_combo.addItem(p.device)
+        if not ports:
+            self.port_combo.addItem("Aucun port trouvé")
+
+    def toggle_connection(self):
+        if self.connect_btn.isChecked():
+            # Tente de se connecter
+            port = self.port_combo.currentText()
+            if port == "Aucun port trouvé" or not port:
+                QMessageBox.warning(self, "Erreur", "Veuillez sélectionner un port COM valide.")
+                self.connect_btn.setChecked(False)
+                return
+
+            self.worker = MotorWorkerThread(port=port)
+            self.worker.data_updated.connect(self.update_ui)
+            self.worker.connection_error.connect(self.on_connection_error)
+            self.worker.start()
+
+            self.connect_btn.setText("DÉCONNECTER")
+            self.port_combo.setEnabled(False)
+            self.refresh_btn.setEnabled(False)
+            self.set_controls_enabled(True)
+
+        else:
+            # Se déconnecte
+            if self.worker:
+                if self.worker.is_running:
+                    self.start_btn.setChecked(False)
+                    self.toggle_motor() # Arrête le moteur avant de couper
+                self.worker.stop()
+                self.worker = None
+
+            self.connect_btn.setText("CONNECTER")
+            self.port_combo.setEnabled(True)
+            self.refresh_btn.setEnabled(True)
+            self.set_controls_enabled(False)
+
+    def on_connection_error(self, err_msg):
+        QMessageBox.critical(self, "Erreur de Connexion", err_msg)
+        self.connect_btn.setChecked(False)
+        self.toggle_connection() # Reset UI
+
+    def set_controls_enabled(self, state):
+        self.start_btn.setEnabled(state)
+        self.gauche_btn.setEnabled(state)
+        self.droite_btn.setEnabled(state)
+        self.speed_spinbox.setEnabled(state)
+        self.vitesse_slider.setEnabled(state)
+        self.vitesse_plus_btn.setEnabled(state)
+        self.vitesse_moins_btn.setEnabled(state)
+        if not state:
+            self.card_vitesse.set_value("0")
+            self.card_pwm.set_value("0")
+            self.card_tension.set_value("0.00")
+
     # --- GESTION DE LA DIRECTION ---
     def select_direction_gauche(self):
-        self.droite_btn.setChecked(False) # Désactive l'autre bouton
-        self.gauche_btn.setChecked(True)  # Force celui-ci à rester actif
-        self.worker.set_direction("GAUCHE")
+        self.droite_btn.setChecked(False)
+        self.gauche_btn.setChecked(True)
+        if self.worker: self.worker.set_direction("GAUCHE")
 
     def select_direction_droite(self):
         self.gauche_btn.setChecked(False)
         self.droite_btn.setChecked(True)
-        self.worker.set_direction("DROITE")
+        if self.worker: self.worker.set_direction("DROITE")
 
     # --- SYNCHRONISATION UI ---
     def update_slider(self, val):
         self.vitesse_slider.blockSignals(True)
         self.vitesse_slider.setValue(int(val))
         self.vitesse_slider.blockSignals(False)
-        self.worker.set_target_speed(val)
+        if self.worker: self.worker.set_target_speed(val)
 
     def update_spinbox(self, val):
         self.speed_spinbox.blockSignals(True)
         self.speed_spinbox.setValue(val)
         self.speed_spinbox.blockSignals(False)
-        self.worker.set_target_speed(val)
+        if self.worker: self.worker.set_target_speed(val)
 
     def toggle_motor(self):
-        if self.worker.is_running:
-            self.worker.set_running(False)
-            self.demarrer_btn.setText("DÉMARRER LE MOTEUR")
-            self.demarrer_btn.setStyleSheet("")
-        else:
+        if not self.worker: return
+
+        if self.start_btn.isChecked():
             self.worker.set_running(True)
-            self.demarrer_btn.setText("ARRÊTER LE MOTEUR")
-            self.demarrer_btn.setStyleSheet("background-color: #ff4c4c; color: white;")
+            self.start_btn.setText("ARRÊTER LE MOTEUR")
+        else:
+            self.worker.set_running(False)
+            self.start_btn.setText("DÉMARRER LE MOTEUR")
 
-    # --- LECTURE DES DONNEES STM32 ---
+    # --- LECTURE DES DONNEES STM32 ET MISE A JOUR GRAPHIQUE ---
     def update_ui(self, data):
-        self.panel_adc.set_value(f"{data['adc']}", (data['adc'] / 4095.0) * 100)
-        self.panel_tension.set_value(f"{data['tension']:.2f}", (data['tension'] / 3.3) * 100)
-        self.panel_pwm.set_value(f"{data['pwm']}", (data['pwm'] / 2099.0) * 100)
+        # Update Cards
+        self.card_tension.set_value(f"{data['tension']:.2f}")
+        self.card_pwm.set_value(f"{data['pwm']}")
 
-        vitesse_abs = abs(data['vitesse'])
-        self.panel_vitesse.set_value(f"{vitesse_abs:.0f}", min((vitesse_abs / 4000.0) * 100, 100))
+        vitesse_actuelle = data['vitesse']
+        self.card_vitesse.set_value(f"{abs(vitesse_actuelle):.0f}")
 
-        # Flèches centrales basées sur la VRAIE vitesse (feedback)
-        if data['vitesse'] < 0:
-            self.dir_left_indic.setStyleSheet("color: #4cdfff; font-size: 60px; font-weight: bold;")
-            self.dir_right_indic.setStyleSheet("color: #3d4661; font-size: 60px; font-weight: bold;")
-        elif data['vitesse'] > 0:
-            self.dir_right_indic.setStyleSheet("color: #4cdfff; font-size: 60px; font-weight: bold;")
-            self.dir_left_indic.setStyleSheet("color: #3d4661; font-size: 60px; font-weight: bold;")
-        else: # À l'arrêt
-            self.dir_left_indic.setStyleSheet("color: #3d4661; font-size: 60px; font-weight: bold;")
-            self.dir_right_indic.setStyleSheet("color: #3d4661; font-size: 60px; font-weight: bold;")
-
-        # Mise a jour du graphique
+        # Update Graph Data
         self.plot_data_time.append(self.time_counter)
-        self.plot_data_vitesse.append(data['vitesse'])
+        self.plot_data_vitesse.append(vitesse_actuelle)
 
         current_consigne = self.speed_spinbox.value()
-        # Si on tourne a gauche, la consigne reelle est negative pour le graphe
-        if self.gauche_btn.isChecked() and self.worker.is_running:
+        # Consigne est negative si on tourne a gauche
+        if self.gauche_btn.isChecked() and self.worker and self.worker.is_running:
             current_consigne = -current_consigne
-        elif not self.worker.is_running:
+        elif not self.worker or not self.worker.is_running:
             current_consigne = 0
 
         self.plot_data_consigne.append(current_consigne)
         self.time_counter += 1
 
+        # Redraw Graph
         self.curve_vitesse.setData(list(self.plot_data_time), list(self.plot_data_vitesse))
         self.curve_consigne.setData(list(self.plot_data_time), list(self.plot_data_consigne))
 
     def closeEvent(self, event):
-        self.worker.stop()
+        if self.worker:
+            self.worker.stop()
         event.accept()
 
 if __name__ == "__main__":
