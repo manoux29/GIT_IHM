@@ -83,7 +83,7 @@ uint8_t rx_index = 0;
 
 // Variables pour le controle du moteur depuis le PC
 volatile uint8_t motor_running = 0;
-volatile int32_t consigne_vitesse_rpm = 150;
+volatile int32_t consigne_vitesse_rpm = 8;
 volatile uint32_t current_pwm = 0;
 
 /* USER CODE END 0 */
@@ -656,7 +656,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
                 {
                     motor_running = 1;
                     // Mettre une petite rotation (consigne actuelle)
-                    current_pwm = (consigne_vitesse_rpm * PWM_MAX) / 3000;
+                    current_pwm = (consigne_vitesse_rpm * PWM_MAX) / 17;
                     if(current_pwm == 0) current_pwm = 200; // petite rotation si 0
                 }
                 else if (strncmp((char*)rx_buffer, "STOP", 4) == 0)
@@ -682,7 +682,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
                         consigne_vitesse_rpm = vitesse;
                         if (motor_running)
                         {
-                            current_pwm = (consigne_vitesse_rpm * PWM_MAX) / 3000;
+                            current_pwm = (consigne_vitesse_rpm * PWM_MAX) / 17;
                         }
                     }
                 }
