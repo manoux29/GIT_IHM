@@ -1,10 +1,12 @@
 import sys
 import serial
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QGridLayout, QLabel, QPushButton, 
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                             QHBoxLayout, QGridLayout, QLabel, QPushButton,
                              QProgressBar, QDoubleSpinBox, QSlider, QFrame)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QPixmap
+import pyqtgraph as pg
+import collections
 
 # --- THREAD DE COMMUNICATION SÉRIE ---
 # (Identique à ton code d'origine)
@@ -23,18 +25,18 @@ class MotorWorkerThread(QThread):
         try:
             self.serial_conn = serial.Serial(self.port, self.baudrate, timeout=1)
             print(f"Connecté avec succès à {self.port}")
-            
+
             while self._keep_running:
                 if self.serial_conn.in_waiting > 0:
                     ligne = self.serial_conn.readline().decode('utf-8', errors='ignore').strip()
-                    
+
                     if ligne and ligne.startswith("ADC:"):
                         try:
                             part_adc = ligne.split("ADC:")[1].split()[0]
                             part_tension = ligne.split("Tension:")[1].split("V")[0]
                             part_pwm = ligne.split("PWM:")[1].split()[0]
                             part_vitesse = ligne.split("Vitesse:")[1].split()[0]
-                            
+
                             donnees = {
                                 'adc': int(part_adc),
                                 'tension': float(part_tension),
@@ -42,13 +44,13 @@ class MotorWorkerThread(QThread):
                                 'vitesse': float(part_vitesse)
                             }
                             self.data_updated.emit(donnees)
-                            
+
                         except Exception as e:
                             print(f"Erreur d'analyse : '{ligne}' -> {e}")
-                            
+
         except serial.SerialException as e:
             print(f"Erreur d'ouverture du port {self.port}: {e}")
-            
+
         finally:
              if self.serial_conn and self.serial_conn.is_open:
                  self.serial_conn.close()
@@ -119,10 +121,10 @@ class MeasurementPanel(QFrame):
         self.value_label = QLabel("0")
         self.value_label.setProperty("class", "MeasureValue")
         if is_large: self.value_label.setStyleSheet("font-size: 36px;")
-             
+
         self.unit_label = QLabel(unit)
         self.unit_label.setStyleSheet("color: #8c98ac; font-size: 14px; font-weight: bold; padding-bottom: 5px;")
-        
+
         value_layout.addWidget(self.value_label, alignment=Qt.AlignmentFlag.AlignBottom)
         value_layout.addWidget(self.unit_label, alignment=Qt.AlignmentFlag.AlignBottom)
         value_layout.addStretch()
@@ -160,17 +162,17 @@ class ModernMotorHMI(QMainWindow):
         self.panel_adc = MeasurementPanel("Valeur ADC Lues", " / 4095")
         self.panel_adc.progress_bar.setStyleSheet("QProgressBar::chunk { background-color: #f5a623; }")
         col1_layout.addWidget(self.panel_adc)
-        
+
         self.panel_tension = MeasurementPanel("Tension", "V")
         col1_layout.addWidget(self.panel_tension)
-        
+
         self.panel_pwm = MeasurementPanel("PWM STM32", " / 2099")
         self.panel_pwm.progress_bar.setStyleSheet("QProgressBar::chunk { background-color: #7ed321; }")
         col1_layout.addWidget(self.panel_pwm)
-        
+
         self.panel_vitesse = MeasurementPanel("Vitesse Réelle", "RPM", is_large=True)
         col1_layout.addWidget(self.panel_vitesse)
-        
+
         content_layout.addLayout(col1_layout, 1)
 
         # --- COLONNE 2 : VISUALISATION (IMAGE) ---
@@ -178,18 +180,18 @@ class ModernMotorHMI(QMainWindow):
         motor_panel.setProperty("class", "CentralPanel")
         motor_layout = QVBoxLayout(motor_panel)
         motor_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
+
         # Intégration de l'image
         self.motor_image = QLabel()
         # Assure-toi que "motor_icon.png" existe dans le même dossier
-        pixmap = QPixmap("motor_icon.png") 
+        pixmap = QPixmap("motor_icon.png")
         if not pixmap.isNull():
             # Redimensionne l'image pour qu'elle s'intègre bien sans être déformée
             self.motor_image.setPixmap(pixmap.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         else:
             self.motor_image.setText("[ Image motor_icon.png introuvable ]")
             self.motor_image.setStyleSheet("color: #8c98ac; font-size: 14px; font-style: italic;")
-            
+
         self.motor_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         motor_layout.addWidget(self.motor_image)
 
@@ -205,7 +207,7 @@ class ModernMotorHMI(QMainWindow):
         dir_layout.addWidget(self.dir_right_indic)
         dir_layout.addStretch()
         motor_layout.addLayout(dir_layout)
-        
+
         content_layout.addWidget(motor_panel, 1)
 
         # --- COLONNE 3 : CONTRÔLE ---
@@ -223,12 +225,12 @@ class ModernMotorHMI(QMainWindow):
         self.gauche_btn = QPushButton("← GAUCHE")
         self.gauche_btn.setObjectName("dir_btn")
         self.gauche_btn.setCheckable(True) # Rend le bouton "activable"
-        
+
         self.droite_btn = QPushButton("DROITE →")
         self.droite_btn.setObjectName("dir_btn")
         self.droite_btn.setCheckable(True)
         self.droite_btn.setChecked(True) # Par défaut, on tourne à droite
-        
+
         btn_dir_layout.addWidget(self.gauche_btn)
         btn_dir_layout.addWidget(self.droite_btn)
         control_layout.addLayout(btn_dir_layout)
@@ -240,8 +242,8 @@ class ModernMotorHMI(QMainWindow):
         control_layout.addWidget(speed_label)
 
         self.speed_spinbox = QDoubleSpinBox()
-        self.speed_spinbox.setRange(0, 17)
-        self.speed_spinbox.setValue(8)
+        self.speed_spinbox.setRange(0, 4000)
+        self.speed_spinbox.setValue(150)
         self.speed_spinbox.setSuffix(" RPM")
         self.speed_spinbox.setAlignment(Qt.AlignmentFlag.AlignCenter)
         control_layout.addWidget(self.speed_spinbox)
@@ -250,14 +252,14 @@ class ModernMotorHMI(QMainWindow):
         slider_layout = QHBoxLayout()
         self.vitesse_moins_btn = QPushButton("-")
         self.vitesse_moins_btn.setFixedWidth(40)
-        
+
         self.vitesse_slider = QSlider(Qt.Orientation.Horizontal)
-        self.vitesse_slider.setRange(0, 17)
-        self.vitesse_slider.setValue(8)
-        
+        self.vitesse_slider.setRange(0, 4000)
+        self.vitesse_slider.setValue(150)
+
         self.vitesse_plus_btn = QPushButton("+")
         self.vitesse_plus_btn.setFixedWidth(40)
-        
+
         slider_layout.addWidget(self.vitesse_moins_btn)
         slider_layout.addWidget(self.vitesse_slider)
         slider_layout.addWidget(self.vitesse_plus_btn)
@@ -272,22 +274,49 @@ class ModernMotorHMI(QMainWindow):
 
         content_layout.addWidget(control_panel, 1)
 
+        # --- LIGNE DU BAS : GRAPHIQUE TEMPS RÉEL ---
+        self.plot_panel = QFrame()
+        self.plot_panel.setProperty("class", "CentralPanel")
+        plot_layout = QVBoxLayout(self.plot_panel)
+
+        self.graph_widget = pg.PlotWidget(title="Suivi de la Vitesse en Temps Réel")
+        self.graph_widget.setBackground('#1e2430')
+        self.graph_widget.setLabel('left', 'Vitesse', units='RPM')
+        self.graph_widget.setLabel('bottom', 'Temps')
+        self.graph_widget.showGrid(x=True, y=True, alpha=0.3)
+        self.graph_widget.setYRange(-4500, 4500) # Range to cover -4000 to 4000 plus some margin
+
+        plot_layout.addWidget(self.graph_widget)
+        main_layout.addWidget(self.plot_panel)
+
+        # Données du graphe
+        self.plot_data_time = collections.deque(maxlen=100)
+        self.plot_data_vitesse = collections.deque(maxlen=100)
+        self.plot_data_consigne = collections.deque(maxlen=100)
+        self.time_counter = 0
+
+        pen_vitesse = pg.mkPen(color='#4cdfff', width=2)
+        pen_consigne = pg.mkPen(color='#f5a623', width=2, style=Qt.PenStyle.DashLine)
+
+        self.curve_vitesse = self.graph_widget.plot(pen=pen_vitesse, name="Vitesse Réelle")
+        self.curve_consigne = self.graph_widget.plot(pen=pen_consigne, name="Consigne")
+
         # --- INITIALISATION ET CONNEXIONS ---
         self.worker = MotorWorkerThread(port="COM7")
         self.worker.data_updated.connect(self.update_ui)
         self.worker.start()
 
         self.demarrer_btn.clicked.connect(self.toggle_motor)
-        
+
         # Logique des boutons de direction
         self.gauche_btn.clicked.connect(self.select_direction_gauche)
         self.droite_btn.clicked.connect(self.select_direction_droite)
-        
+
         # Synchronisation slider/spinbox
         self.speed_spinbox.valueChanged.connect(self.update_slider)
         self.vitesse_slider.valueChanged.connect(self.update_spinbox)
-        self.vitesse_plus_btn.clicked.connect(lambda: self.speed_spinbox.setValue(self.speed_spinbox.value() + 1))
-        self.vitesse_moins_btn.clicked.connect(lambda: self.speed_spinbox.setValue(max(0, self.speed_spinbox.value() - 1)))
+        self.vitesse_plus_btn.clicked.connect(lambda: self.speed_spinbox.setValue(self.speed_spinbox.value() + 50))
+        self.vitesse_moins_btn.clicked.connect(lambda: self.speed_spinbox.setValue(max(0, self.speed_spinbox.value() - 50)))
 
     # --- GESTION DE LA DIRECTION ---
     def select_direction_gauche(self):
@@ -317,21 +346,21 @@ class ModernMotorHMI(QMainWindow):
         if self.worker.is_running:
             self.worker.set_running(False)
             self.demarrer_btn.setText("DÉMARRER LE MOTEUR")
-            self.demarrer_btn.setStyleSheet("") 
+            self.demarrer_btn.setStyleSheet("")
         else:
             self.worker.set_running(True)
             self.demarrer_btn.setText("ARRÊTER LE MOTEUR")
-            self.demarrer_btn.setStyleSheet("background-color: #ff4c4c; color: white;") 
+            self.demarrer_btn.setStyleSheet("background-color: #ff4c4c; color: white;")
 
     # --- LECTURE DES DONNEES STM32 ---
     def update_ui(self, data):
         self.panel_adc.set_value(f"{data['adc']}", (data['adc'] / 4095.0) * 100)
         self.panel_tension.set_value(f"{data['tension']:.2f}", (data['tension'] / 3.3) * 100)
         self.panel_pwm.set_value(f"{data['pwm']}", (data['pwm'] / 2099.0) * 100)
-        
+
         vitesse_abs = abs(data['vitesse'])
-        self.panel_vitesse.set_value(f"{vitesse_abs:.0f}", min((vitesse_abs / 17.0) * 100, 100))
-        
+        self.panel_vitesse.set_value(f"{vitesse_abs:.0f}", min((vitesse_abs / 4000.0) * 100, 100))
+
         # Flèches centrales basées sur la VRAIE vitesse (feedback)
         if data['vitesse'] < 0:
             self.dir_left_indic.setStyleSheet("color: #4cdfff; font-size: 60px; font-weight: bold;")
@@ -342,6 +371,23 @@ class ModernMotorHMI(QMainWindow):
         else: # À l'arrêt
             self.dir_left_indic.setStyleSheet("color: #3d4661; font-size: 60px; font-weight: bold;")
             self.dir_right_indic.setStyleSheet("color: #3d4661; font-size: 60px; font-weight: bold;")
+
+        # Mise a jour du graphique
+        self.plot_data_time.append(self.time_counter)
+        self.plot_data_vitesse.append(data['vitesse'])
+
+        current_consigne = self.speed_spinbox.value()
+        # Si on tourne a gauche, la consigne reelle est negative pour le graphe
+        if self.gauche_btn.isChecked() and self.worker.is_running:
+            current_consigne = -current_consigne
+        elif not self.worker.is_running:
+            current_consigne = 0
+
+        self.plot_data_consigne.append(current_consigne)
+        self.time_counter += 1
+
+        self.curve_vitesse.setData(list(self.plot_data_time), list(self.plot_data_vitesse))
+        self.curve_consigne.setData(list(self.plot_data_time), list(self.plot_data_consigne))
 
     def closeEvent(self, event):
         self.worker.stop()

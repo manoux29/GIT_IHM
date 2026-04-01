@@ -85,6 +85,12 @@ uint8_t rx_index = 0;
 volatile uint8_t motor_running = 0;
 volatile int32_t consigne_vitesse_rpm = 8;
 volatile uint32_t current_pwm = 0;
+volatile uint32_t target_pwm = 0;
+
+// Gestion securisee du changement de direction
+volatile uint8_t direction_change_pending = 0;
+volatile uint32_t direction_change_start_time = 0;
+volatile uint8_t next_direction = 0;
 
 /* USER CODE END 0 */
 
@@ -169,11 +175,6 @@ int main(void)
 	             valeur_brute = HAL_ADC_GetValue(&hadc1);
 	             tension_volts = valeur_brute * 3.3f / 4095.0f;
 
-	             // Mise a jour du PWM basee sur la consigne UART, et non plus sur l'ADC
-	             uint32_t duty = current_pwm;
-	             __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, duty);
-
-
 	             // Tâche 3 : UART
 	             char msg[80];
 	             int partie_entiere = (int)tension_volts;
@@ -181,7 +182,7 @@ int main(void)
 	             sprintf(msg, "ADC:%u  Tension:%d.%02dV  PWM:%lu  Vitesse:%ld RPM\r\n",
 	                                 (unsigned int)valeur_brute,
 	                                 partie_entiere, partie_decimale,
-	                                 duty,
+	                                 current_pwm,
 	                                 vitesse_rpm);
 	            /* sprintf(msg, "ADC:%u  PWM:%lu  Count:%u  Delta:%d  Vitesse:%ld RPM\r\n",
 	                         (unsigned int)valeur_brute,
@@ -195,6 +196,30 @@ int main(void)
 	  else if(flag_100ms)
       {
           flag_100ms = 0;
+
+          // --- GESTION DU CHANGEMENT DE SENS SECURISÉ ---
+          if (direction_change_pending)
+          {
+              // Attendre 500 ms (moteur a l'arret)
+              if ((HAL_GetTick() - direction_change_start_time) >= 500)
+              {
+                  // Appliquer la nouvelle direction
+                  sens = next_direction;
+                  moteur_sens(sens);
+
+                  // Retablir le PWM
+                  if (motor_running)
+                  {
+                      current_pwm = target_pwm;
+                  }
+                  direction_change_pending = 0; // Terminé
+              }
+          }
+
+          // Application du PWM a tout moment (apres securite)
+          __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, current_pwm);
+
+          // --- CALCUL DE LA VITESSE ---
           int32_t count_actuel = (int32_t)__HAL_TIM_GET_COUNTER(&htim4);
           int32_t delta = count_actuel - count_precedent;
 
@@ -655,24 +680,40 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
                 if (strncmp((char*)rx_buffer, "START", 5) == 0)
                 {
                     motor_running = 1;
-                    // Mettre une petite rotation (consigne actuelle)
-                    current_pwm = (consigne_vitesse_rpm * PWM_MAX) / 17;
-                    if(current_pwm == 0) current_pwm = 200; // petite rotation si 0
+                    target_pwm = (consigne_vitesse_rpm * PWM_MAX) / 4000;
+                    if(target_pwm == 0) target_pwm = 200;
+
+                    if (!direction_change_pending)
+                    {
+                        current_pwm = target_pwm;
+                    }
                 }
                 else if (strncmp((char*)rx_buffer, "STOP", 4) == 0)
                 {
                     motor_running = 0;
-                    current_pwm = 0; // stop met pwm a 0
+                    current_pwm = 0;
+                    target_pwm = 0;
+                    direction_change_pending = 0; // Annuler un changement de dir en cours
                 }
                 else if (strncmp((char*)rx_buffer, "DIR:GAUCHE", 10) == 0)
                 {
-                    sens = 1;
-                    moteur_sens(sens);
+                    if (sens != 1)
+                    {
+                        next_direction = 1;
+                        current_pwm = 0; // Arret immediat
+                        direction_change_start_time = HAL_GetTick();
+                        direction_change_pending = 1;
+                    }
                 }
                 else if (strncmp((char*)rx_buffer, "DIR:DROITE", 10) == 0)
                 {
-                    sens = 0;
-                    moteur_sens(sens);
+                    if (sens != 0)
+                    {
+                        next_direction = 0;
+                        current_pwm = 0; // Arret immediat
+                        direction_change_start_time = HAL_GetTick();
+                        direction_change_pending = 1;
+                    }
                 }
                 else if (strncmp((char*)rx_buffer, "SPEED:", 6) == 0)
                 {
@@ -680,9 +721,11 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
                     if (sscanf((char*)rx_buffer + 6, "%d", &vitesse) == 1)
                     {
                         consigne_vitesse_rpm = vitesse;
-                        if (motor_running)
+                        target_pwm = (consigne_vitesse_rpm * PWM_MAX) / 4000;
+
+                        if (motor_running && !direction_change_pending)
                         {
-                            current_pwm = (consigne_vitesse_rpm * PWM_MAX) / 17;
+                            current_pwm = target_pwm;
                         }
                     }
                 }
