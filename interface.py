@@ -79,6 +79,79 @@ class MotorWorkerThread(QThread):
         self.send_command(f"SPEED:{int(speed)}")
 
 
+
+import time
+import random
+
+class VirtualMotorWorkerThread(QThread):
+    data_updated = pyqtSignal(dict)
+    connection_error = pyqtSignal(str)
+
+    def __init__(self):
+        super().__init__()
+        self._keep_running = True
+        self.is_running = False
+        self.target_speed = 150
+        self.current_speed = 0.0
+        self.direction = 1 # 1 = droite, -1 = gauche
+        self.direction_pending = False
+        self.direction_change_start_time = 0
+
+    def run(self):
+        print("Connecté avec succès au Moteur Virtuel (Simulation)")
+        while self._keep_running:
+            # --- Logique de simulation physique ---
+            if self.direction_pending:
+                # Mode freinage avant changement de sens
+                self.current_speed *= 0.8
+                if time.time() - self.direction_change_start_time > 0.5:
+                    self.direction_pending = False
+            else:
+                # Cible réelle prenant en compte le sens et l'état
+                cible = self.target_speed * self.direction if self.is_running else 0
+
+                # Inertie du moteur (filtre passe-bas)
+                self.current_speed += (cible - self.current_speed) * 0.1
+
+                # Bruit de mesure
+                if abs(self.current_speed) > 5:
+                    self.current_speed += random.uniform(-10, 10)
+
+            # --- Génération des fausses données ---
+            vitesse_rpm = int(self.current_speed)
+            pwm_val = int((abs(vitesse_rpm) * 2099) / 4000)
+            tension_simulee = 3.3 * (abs(self.target_speed) / 4000.0) if self.is_running else 0.0
+            tension_simulee += random.uniform(0.0, 0.05) # Bruit ADC
+            adc_val = int((tension_simulee / 3.3) * 4095)
+
+            donnees = {
+                'adc': adc_val,
+                'tension': tension_simulee,
+                'pwm': pwm_val,
+                'vitesse': vitesse_rpm
+            }
+
+            self.data_updated.emit(donnees)
+            time.sleep(0.1) # Boucle toutes les 100ms comme le STM32
+
+    def stop(self):
+        self._keep_running = False
+        self.wait()
+
+    def set_running(self, state):
+        self.is_running = state
+
+    def set_direction(self, direction_str):
+        new_dir = 1 if direction_str == "DROITE" else -1
+        if new_dir != self.direction:
+            self.direction = new_dir
+            self.direction_pending = True
+            self.direction_change_start_time = time.time()
+
+    def set_target_speed(self, speed):
+        self.target_speed = speed
+
+
 # --- STYLESHEET GLOBAL ---
 QSS_STYLESHEET = """
 QMainWindow { background-color: #12151C; color: #E0E6ED; font-family: 'Segoe UI', Arial, sans-serif; }
@@ -342,11 +415,10 @@ class ModernMotorHMI(QMainWindow):
 
     def refresh_ports(self):
         self.port_combo.clear()
+        self.port_combo.addItem("Simulation (Moteur Virtuel)")
         ports = serial.tools.list_ports.comports()
         for p in ports:
             self.port_combo.addItem(p.device)
-        if not ports:
-            self.port_combo.addItem("Aucun port trouvé")
 
     def toggle_connection(self):
         if self.connect_btn.isChecked():
@@ -357,7 +429,11 @@ class ModernMotorHMI(QMainWindow):
                 self.connect_btn.setChecked(False)
                 return
 
-            self.worker = MotorWorkerThread(port=port)
+            if port == "Simulation (Moteur Virtuel)":
+                self.worker = VirtualMotorWorkerThread()
+            else:
+                self.worker = MotorWorkerThread(port=port)
+
             self.worker.data_updated.connect(self.update_ui)
             self.worker.connection_error.connect(self.on_connection_error)
             self.worker.start()
