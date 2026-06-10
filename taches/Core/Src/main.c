@@ -65,6 +65,7 @@ static void MX_TIM2_Init(void);
 
 #define IN_PORT  GPIOA
 #define PWM_MAX  2099
+#define VITESSE_MAX_RPM  250   // vitesse max du moteur (consigne 250 tr/min -> PWM max)
 
 uint32_t counter = 0;
 uint32_t valeur_brute = 0;
@@ -816,7 +817,8 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
                 if (strncmp((char*)rx_buffer, "START", 5) == 0)
                 {
                     motor_running = 1;
-                    current_pwm = (consigne_vitesse_rpm * PWM_MAX) / 3000;
+                    current_pwm = (consigne_vitesse_rpm * PWM_MAX) / VITESSE_MAX_RPM;
+                    if (current_pwm > PWM_MAX) current_pwm = PWM_MAX;
                     if (current_pwm == 0) current_pwm = 200; // petite rotation si consigne 0
                 }
                 else if (strncmp((char*)rx_buffer, "STOP", 4) == 0)
@@ -839,10 +841,14 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
                     int vitesse;
                     if (sscanf((char*)rx_buffer + 6, "%d", &vitesse) == 1)
                     {
+                        // borner la consigne a [0, VITESSE_MAX_RPM]
+                        if (vitesse < 0) vitesse = 0;
+                        if (vitesse > VITESSE_MAX_RPM) vitesse = VITESSE_MAX_RPM;
                         consigne_vitesse_rpm = vitesse;
                         if (motor_running)
                         {
-                            current_pwm = (consigne_vitesse_rpm * PWM_MAX) / 3000;
+                            current_pwm = (consigne_vitesse_rpm * PWM_MAX) / VITESSE_MAX_RPM;
+                            if (current_pwm > PWM_MAX) current_pwm = PWM_MAX;
                         }
                     }
                 }
