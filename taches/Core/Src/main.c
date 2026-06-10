@@ -91,6 +91,17 @@ volatile static int32_t count_actuel;
 #define RESOLUTION_ENCODEUR  500
 #define RAPPORT_REDUCTION    16
 
+// Reception UART (commandes envoyees par l'IHM)
+uint8_t rx_byte;
+uint8_t rx_buffer[50];
+uint8_t rx_index = 0;
+
+// Controle du moteur depuis l'IHM (PC)
+volatile uint8_t motor_running = 0;
+volatile int32_t consigne_vitesse_rpm = 150;
+volatile uint32_t current_pwm = 0;
+
+void moteur_sens(uint8_t sens);
 
 /* USER CODE END 0 */
 
@@ -151,6 +162,9 @@ int main(void)
   __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, 500);
   HAL_ADC_Start_DMA(&hadc1,(uint32_t*)adc_buffer, 2);
 
+  // Demarrer la reception UART par interruption (commandes de l'IHM)
+  HAL_UART_Receive_IT(&huart2, &rx_byte, 1);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -183,7 +197,8 @@ int main(void)
 
 
 
-	  	             uint32_t duty = (valeur_brute * PWM_MAX) / 4095.0f;
+	  	             // PWM pilote par la consigne recue de l'IHM (START/STOP/SPEED)
+	  	             uint32_t duty = current_pwm;
 	  	             __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, duty);
 
 
@@ -785,6 +800,67 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 
 
 
+}
+
+// Reception des commandes envoyees par l'IHM (START/STOP/DIR/SPEED)
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART2)
+    {
+        if (rx_byte == '\n' || rx_byte == '\r')
+        {
+            rx_buffer[rx_index] = '\0'; // Fin de chaine
+
+            if (rx_index > 0)
+            {
+                if (strncmp((char*)rx_buffer, "START", 5) == 0)
+                {
+                    motor_running = 1;
+                    current_pwm = (consigne_vitesse_rpm * PWM_MAX) / 3000;
+                    if (current_pwm == 0) current_pwm = 200; // petite rotation si consigne 0
+                }
+                else if (strncmp((char*)rx_buffer, "STOP", 4) == 0)
+                {
+                    motor_running = 0;
+                    current_pwm = 0; // arret : PWM a 0
+                }
+                else if (strncmp((char*)rx_buffer, "DIR:GAUCHE", 10) == 0)
+                {
+                    sens = 1;
+                    moteur_sens(sens);
+                }
+                else if (strncmp((char*)rx_buffer, "DIR:DROITE", 10) == 0)
+                {
+                    sens = 0;
+                    moteur_sens(sens);
+                }
+                else if (strncmp((char*)rx_buffer, "SPEED:", 6) == 0)
+                {
+                    int vitesse;
+                    if (sscanf((char*)rx_buffer + 6, "%d", &vitesse) == 1)
+                    {
+                        consigne_vitesse_rpm = vitesse;
+                        if (motor_running)
+                        {
+                            current_pwm = (consigne_vitesse_rpm * PWM_MAX) / 3000;
+                        }
+                    }
+                }
+            }
+
+            rx_index = 0; // reinitialiser pour la prochaine commande
+        }
+        else
+        {
+            if (rx_index < sizeof(rx_buffer) - 1)
+            {
+                rx_buffer[rx_index++] = rx_byte;
+            }
+        }
+
+        // Relancer la reception du prochain octet
+        HAL_UART_Receive_IT(&huart2, &rx_byte, 1);
+    }
 }
 
 
