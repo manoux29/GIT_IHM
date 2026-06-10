@@ -198,8 +198,17 @@ int main(void)
 
 
 
-	  	             // PWM pilote par la consigne recue de l'IHM (START/STOP/SPEED)
-	  	             uint32_t duty = current_pwm;
+	  	             // Mode par defaut : PWM pilote par le potentiometre (ADC).
+	  	             // Apres START depuis l'IHM (motor_running=1) : PWM pilote par la consigne PC.
+	  	             uint32_t duty;
+	  	             if (motor_running)
+	  	             {
+	  	                 duty = current_pwm;                          // consigne IHM
+	  	             }
+	  	             else
+	  	             {
+	  	                 duty = (valeur_brute * PWM_MAX) / 4095.0f;   // potentiometre
+	  	             }
 	  	             __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, duty);
 
 
