@@ -240,7 +240,7 @@ class ModernMotorHMI(QMainWindow):
         control_layout.addWidget(speed_label)
 
         self.speed_spinbox = QDoubleSpinBox()
-        self.speed_spinbox.setRange(0, 3000)
+        self.speed_spinbox.setRange(0, 250)
         self.speed_spinbox.setValue(150)
         self.speed_spinbox.setSuffix(" RPM")
         self.speed_spinbox.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -252,7 +252,7 @@ class ModernMotorHMI(QMainWindow):
         self.vitesse_moins_btn.setFixedWidth(40)
         
         self.vitesse_slider = QSlider(Qt.Orientation.Horizontal)
-        self.vitesse_slider.setRange(0, 3000)
+        self.vitesse_slider.setRange(0, 250)
         self.vitesse_slider.setValue(150)
         
         self.vitesse_plus_btn = QPushButton("+")
@@ -330,7 +330,7 @@ class ModernMotorHMI(QMainWindow):
         self.panel_pwm.set_value(f"{data['pwm']}", (data['pwm'] / 2099.0) * 100)
         
         vitesse_abs = abs(data['vitesse'])
-        self.panel_vitesse.set_value(f"{vitesse_abs:.0f}", min((vitesse_abs / 3000.0) * 100, 100))
+        self.panel_vitesse.set_value(f"{vitesse_abs:.0f}", min((vitesse_abs / 250.0) * 100, 100))
         
         # Flèches centrales basées sur la VRAIE vitesse (feedback)
         if data['vitesse'] < 0:
